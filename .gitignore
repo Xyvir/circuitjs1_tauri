@@ -62,6 +62,11 @@ Temporary Items
 /build
 /site
 
+# Tauri build output
+/app/www
+/app/src-tauri/target
+/app/src-tauri/gen
+
 # Other stuff
 /tests
 /circuits

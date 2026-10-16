@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>CircuitJS1</title>
+    <script>
+      // Tauri serves build.frontendDist with index.html as the entry point, but
+      // the actual application page is circuitjs.html. Forward, preserving any
+      // query string, so a bare "/" navigation still lands on the simulator.
+      location.replace('circuitjs.html' + location.search + location.hash);
+    </script>
+  </head>
+  <body></body>
+</html>

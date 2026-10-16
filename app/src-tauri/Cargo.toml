@@ -1,0 +1,25 @@
+[package]
+name = "circuitjs1"
+version = "0.0.1"
+description = "Interactive Circuit Simulator"
+authors = ["Iain Sharp", "Paul Falstad"]
+edition = "2021"
+rust-version = "1.90"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["devtools"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-single-instance = "2"
+serde_json = "1"
+base64 = "0.22"
+percent-encoding = "2"
+tokio = { version = "1", features = ["sync"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

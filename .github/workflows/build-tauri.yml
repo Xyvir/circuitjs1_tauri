@@ -1,0 +1,159 @@
+name: Build Tauri App
+
+# The desktop app is a Tauri shell around the compiled GWT frontend, so a build
+# needs two toolchains: JDK 8 + Gradle for the Java/GWT side, and Rust for the
+# shell. The frontend is built once and shared with every platform job rather
+# than recompiling GWT four times.
+
+on:
+  push:
+    branches: [ master, dev ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ master, dev ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tauri-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Fast static checks. Uses a stub frontend, because tauri-codegen only needs
+  # build.frontendDist to exist at compile time and clippy is static analysis.
+  checks:
+    name: Rust checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri -> target
+
+      - name: Create stub frontend
+        run: |
+          mkdir -p app/www
+          cp app/src-tauri/entry.html app/www/index.html
+
+      - name: Check formatting
+        working-directory: app/src-tauri
+        run: cargo fmt --check
+
+      - name: Lint
+        working-directory: app/src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+  frontend:
+    name: Build GWT frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 8
+        uses: actions/setup-java@v4
+        with:
+          java-version: '8'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build site
+        run: ./gradlew makeSite --console verbose
+
+      - name: Upload compiled frontend
+        uses: actions/upload-artifact@v4
+        with:
+          name: circuitjs1-site
+          path: site
+          retention-days: 1
+          if-no-files-found: error
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: frontend
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (Apple silicon)
+            platform: macos-latest
+            args: '--target aarch64-apple-darwin'
+          - name: macOS (Intel)
+            platform: macos-latest
+            args: '--target x86_64-apple-darwin'
+          - name: Linux
+            platform: ubuntu-22.04
+            args: ''
+          - name: Windows
+            platform: windows-latest
+            args: ''
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download compiled frontend
+        uses: actions/download-artifact@v4
+        with:
+          name: circuitjs1-site
+          path: site
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+
+      # Prebuilt CLI binary; avoids compiling tauri-cli on every platform job.
+      - name: Install Tauri CLI
+        run: npm install -g @tauri-apps/cli@^2
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # Only the macOS runners need extra targets.
+          targets: ${{ startsWith(matrix.platform, 'macos') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri -> target
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Stage frontend for Tauri
+        shell: bash
+        run: bash app/stage-frontend.sh
+
+      - name: Build app
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: app
+          tauriScript: tauri
+          args: ${{ matrix.args }}
+          # Installers are downloadable from the run summary on every build.
+          uploadWorkflowArtifacts: true
+          # A draft release is only created for v* tags.
+          tagName: ${{ startsWith(github.ref, 'refs/tags/v') && 'circuitjs1-v__VERSION__' || '' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/tags/v') && 'CircuitJS1 v__VERSION__' || '' }}
+          releaseDraft: true
+          prerelease: false
