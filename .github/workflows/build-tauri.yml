@@ -205,6 +205,17 @@ jobs:
             exit 1
           fi
 
+          # A portable build is only self-contained if the GWT frontend was
+          # baked into the binary. Tauri embeds those assets uncompressed, so a
+          # string search confirms it without needing a display to launch the
+          # window. If asset compression is ever enabled this check needs a
+          # different approach, so treat a failure here as "revisit", not
+          # necessarily "broken".
+          if ! grep -qaE 'circuitjs\.html|circuitjs1\.nocache\.js' "$SRC"; then
+            echo "::error::$SRC does not embed the GWT frontend, so it is not portable."
+            exit 1
+          fi
+
           NAME="${{ matrix.portableStem }}-${VERSION}${{ matrix.portableExt }}"
           mkdir -p portable
           cp "$SRC" "portable/$NAME"
