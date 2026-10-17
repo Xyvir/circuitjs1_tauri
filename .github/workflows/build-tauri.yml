@@ -89,19 +89,42 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # `portableStem`/`portableExt` describe the raw release binary that
+        # `tauri build` emits before bundling. It embeds the GWT frontend, so it
+        # runs standalone with no installer and no sibling files.
         include:
           - name: macOS (Apple silicon)
             platform: macos-latest
             args: '--target aarch64-apple-darwin'
+            artifact: macos-arm64
+            portablePath: app/src-tauri/target/aarch64-apple-darwin/release/circuitjs1
+            portableStem: CircuitJS1-macos-arm64
+            portableExt: ''
+            portableArchive: 'true'
           - name: macOS (Intel)
             platform: macos-latest
             args: '--target x86_64-apple-darwin'
+            artifact: macos-x64
+            portablePath: app/src-tauri/target/x86_64-apple-darwin/release/circuitjs1
+            portableStem: CircuitJS1-macos-x64
+            portableExt: ''
+            portableArchive: 'true'
           - name: Linux
             platform: ubuntu-22.04
             args: ''
+            artifact: linux-x64
+            portablePath: app/src-tauri/target/release/circuitjs1
+            portableStem: CircuitJS1-linux-x64
+            portableExt: ''
+            portableArchive: 'true'
           - name: Windows
             platform: windows-latest
             args: ''
+            artifact: windows-x64
+            portablePath: app/src-tauri/target/release/circuitjs1.exe
+            portableStem: CircuitJS1-windows-x64
+            portableExt: '.exe'
+            portableArchive: ''
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
@@ -157,3 +180,46 @@ jobs:
           releaseName: ${{ startsWith(github.ref, 'refs/tags/v') && 'CircuitJS1 v__VERSION__' || '' }}
           releaseDraft: true
           prerelease: false
+
+      # The raw release binary is a portable executable: no installer, no data
+      # files to keep alongside it. On Windows it does rely on the WebView2
+      # Evergreen Runtime, which is built into Windows 11 and delivered to
+      # Windows 10 by Windows Update.
+      - name: Stage portable executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' app/src-tauri/tauri.conf.json)
+          VERSION=${VERSION%%$'\n'*}
+          if [ -z "$VERSION" ]; then
+            echo "::error::Could not read the app version from tauri.conf.json"
+            exit 1
+          fi
+
+          SRC="${{ matrix.portablePath }}"
+          if [ ! -f "$SRC" ]; then
+            echo "::error::Expected a portable binary at $SRC but it does not exist."
+            echo "Searched for candidates under app/src-tauri/target:"
+            find app/src-tauri/target -maxdepth 4 -type f \
+              \( -name 'circuitjs1' -o -name 'circuitjs1.exe' \) -not -path '*/deps/*' || true
+            exit 1
+          fi
+
+          NAME="${{ matrix.portableStem }}-${VERSION}${{ matrix.portableExt }}"
+          mkdir -p portable
+          cp "$SRC" "portable/$NAME"
+          # Artifacts do not preserve the Unix executable bit, so ship a tarball
+          # alongside the bare binary for the non-Windows platforms.
+          if [ "${{ matrix.portableArchive }}" = "true" ]; then
+            tar -czf "portable/$NAME.tar.gz" -C "$(dirname "$SRC")" "$(basename "$SRC")"
+          fi
+          echo "Staged portable build:"
+          ls -l portable
+
+      - name: Upload portable build
+        uses: actions/upload-artifact@v4
+        with:
+          name: portable-${{ matrix.artifact }}
+          path: portable
+          retention-days: 90
+          if-no-files-found: error
